@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include_('Ui') ?>
+  <style>
+    .book { display: grid; grid-template-columns: 280px 1fr 220px; }
+    .book > section { padding: 28px; }
+    .book > section + section { border-left: 1px solid var(--line); }
+    .who p { margin-top: 10px; }
+    .types { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+    .type {
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: transparent;
+      padding: 10px 12px;
+    }
+    .type span { display: block; font-size: 13px; color: var(--muted); }
+    .type[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .times h2 { font-size: 17px; margin-bottom: 12px; }
+    .time-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+    .time {
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      background: transparent;
+      border-radius: 8px;
+      padding: 9px 0;
+      font-weight: 600;
+    }
+    .time:hover { background: var(--accent-soft); }
+    .details { max-width: 520px; }
+    .chosen { margin: 6px 0 4px; font-weight: 500; }
+    .actions { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
+    .hp { position: absolute; left: -5000px; }
+    .done { padding: 48px 28px; max-width: 560px; }
+    .done p { margin-top: 12px; }
+    @media (max-width: 860px) {
+      body { padding-top: 16px; }
+      .book { grid-template-columns: 1fr; }
+      .book > section { padding: 20px; }
+      .book > section + section { border-left: 0; border-top: 1px solid var(--line); }
+      .time-list { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card" id="card">
+    <div class="book" id="pick">
+      <section class="who">
+        <h1 id="name"></h1>
+        <p class="muted" id="intro"></p>
+        <div class="types" id="types" role="group" aria-label="Meeting length"></div>
+        <label for="tz">Your time zone</label>
+        <select id="tz"></select>
+      </section>
+      <section>
+        <div id="month"></div>
+        <div class="spinner" id="loading" hidden>Checking the calendar…</div>
+        <div class="error" id="pick-error" role="alert"></div>
+      </section>
+      <section class="times">
+        <h2 id="day-title"></h2>
+        <div class="time-list" id="times"></div>
+      </section>
+    </div>
+
+    <form class="book details-wrap" id="details" hidden>
+      <section style="grid-column: 1 / -1">
+        <div class="details">
+          <button type="button" class="link-btn" id="back">‹ Back</button>
+          <h1 style="margin-top:14px" id="details-title"></h1>
+          <p class="chosen" id="chosen"></p>
+          <label for="f-name">Your name</label>
+          <input type="text" id="f-name" autocomplete="name" required maxlength="100">
+          <label for="f-email">Email</label>
+          <input type="email" id="f-email" autocomplete="email" required maxlength="200">
+          <label for="f-note">Anything to share before we meet? <span class="muted">(optional)</span></label>
+          <textarea id="f-note" rows="4" maxlength="1500"></textarea>
+          <input type="text" class="hp" id="f-website" tabindex="-1" autocomplete="off" aria-hidden="true">
+          <div class="actions">
+            <button class="btn" type="submit" id="confirm">Confirm</button>
+          </div>
+          <div class="error" id="form-error" role="alert"></div>
+        </div>
+      </section>
+    </form>
+
+    <div class="done" id="done" hidden>
+      <h1>You’re booked.</h1>
+      <p class="chosen" id="done-when"></p>
+      <p class="muted" id="done-where"></p>
+      <p class="muted">A calendar invitation is on its way to <strong id="done-email"></strong>. To change or cancel, reply to the invitation.</p>
+    </div>
+  </main>
+
+  <script>
+    var BOOT = <?!= boot ?>;
+    var $ = function (id) { return document.getElementById(id); };
+
+    var S = {
+      type: BOOT.types.filter(function (t) { return t.id === BOOT.startType; })[0] || BOOT.types[Math.min(1, BOOT.types.length - 1)],
+      tz: guessTz(),
+      month: null,
+      day: null,
+      slot: null,
+      cache: {},
+      jumped: false
+    };
+    var today = dateKey(Date.now(), S.tz);
+    S.month = today.slice(0, 7);
+
+    function horizonMonth() { return dateKey(Date.now() + BOOT.maxDaysAhead * DAY_MS, S.tz).slice(0, 7); }
+    function cacheKey() { return S.type.id + '|' + S.month; }
+
+    function byDay() {
+      var out = {};
+      (S.cache[cacheKey()] || []).forEach(function (ms) {
+        var k = dateKey(ms, S.tz);
+        if (k.slice(0, 7) !== S.month) return;
+        (out[k] = out[k] || []).push(ms);
+      });
+      return out;
+    }
+
+    function drawTypes() {
+      var box = $('types');
+      box.innerHTML = '';
+      BOOT.types.forEach(function (t) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'type';
+        b.setAttribute('aria-pressed', String(t.id === S.type.id));
+        b.textContent = t.title;
+        var sub = document.createElement('span');
+        sub.textContent = t.minutes + ' minutes';
+        b.appendChild(sub);
+        b.onclick = function () { S.type = t; S.jumped = false; drawTypes(); load(); };
+        box.appendChild(b);
+      });
+    }
+
+    function render() {
+      var days = byDay();
+      if (S.day && !days[S.day]) S.day = null;
+      if (!S.day) S.day = Object.keys(days).sort()[0] || null;
+      drawMonth($('month'), {
+        month: S.month,
+        today: today,
+        isOn: function (k) { return !!days[k]; },
+        isPicked: function (k) { return k === S.day; },
+        onPick: function (k) { S.day = k; render(); },
+        canPrev: S.month > today.slice(0, 7),
+        canNext: S.month < horizonMonth(),
+        onMonth: function (m) { S.month = m; S.day = null; load(); }
+      });
+      var list = $('times');
+      list.innerHTML = '';
+      if (!S.day) {
+        $('day-title').textContent = '';
+        var none = document.createElement('p');
+        none.className = 'muted small';
+        none.textContent = S.cache[cacheKey()] ? 'No open times this month.' : '';
+        list.appendChild(none);
+        return;
+      }
+      $('day-title').textContent = fmtDay(S.day);
+      days[S.day].forEach(function (ms) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'time';
+        b.textContent = fmtTime(ms, S.tz);
+        b.onclick = function () { choose(ms); };
+        list.appendChild(b);
+      });
+    }
+
+    function load() {
+      $('pick-error').textContent = '';
+      var key = cacheKey();
+      if (S.cache[key]) { render(); return; }
+      render();
+      $('loading').hidden = false;
+      var month = S.month;
+      google.script.run
+        .withSuccessHandler(function (slots) {
+          S.cache[key] = slots;
+          $('loading').hidden = true;
+          if (month !== S.month) return;
+          var empty = !Object.keys(byDay()).length;
+          if (empty && !S.jumped && S.month < horizonMonth()) {
+            S.jumped = true;
+            S.month = shiftMonth(S.month, 1);
+            load();
+            return;
+          }
+          render();
+        })
+        .withFailureHandler(function (err) {
+          $('loading').hidden = true;
+          $('pick-error').textContent = serverMessage(err);
+        })
+        .getSlots(S.type.id, addDays(S.month + '-01', -1), addDays(lastOfMonth(S.month), 1));
+    }
+
+    function whenText(ms) {
+      return fmtDay(dateKey(ms, S.tz)) + ', ' + fmtTime(ms, S.tz) + '–' +
+        fmtTime(ms + S.type.minutes * 60000, S.tz) + ' (' + S.tz.replace(/_/g, ' ') + ')';
+    }
+
+    function choose(ms) {
+      S.slot = ms;
+      $('details-title').textContent = S.type.title;
+      $('chosen').textContent = whenText(ms);
+      $('form-error').textContent = '';
+      $('pick').hidden = true;
+      $('details').hidden = false;
+      $('f-name').focus();
+    }
+
+    $('back').onclick = function () {
+      $('details').hidden = true;
+      $('pick').hidden = false;
+    };
+
+    $('details').onsubmit = function (e) {
+      e.preventDefault();
+      var btn = $('confirm');
+      btn.disabled = true;
+      btn.textContent = 'Booking…';
+      $('form-error').textContent = '';
+      var email = $('f-email').value.trim();
+      google.script.run
+        .withSuccessHandler(function (res) {
+          btn.disabled = false;
+          btn.textContent = 'Confirm';
+          if (res.ok) {
+            $('done-when').textContent = whenText(S.slot);
+            var where = $('done-where');
+            where.innerHTML = '';
+            [['Zoom', res.zoom], ['Google Meet', res.meet]].forEach(function (m) {
+              if (!m[1]) return;
+              var line = document.createElement('div');
+              var a = document.createElement('a');
+              a.href = m[1];
+              a.textContent = m[1];
+              line.appendChild(document.createTextNode(m[0] + ' '));
+              line.appendChild(a);
+              where.appendChild(line);
+            });
+            $('done-email').textContent = email;
+            $('details').hidden = true;
+            $('done').hidden = false;
+            return;
+          }
+          $('form-error').textContent = res.message;
+          if (res.taken) {
+            delete S.cache[cacheKey()];
+            setTimeout(function () { $('back').onclick(); load(); }, 1600);
+          }
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'Confirm';
+          $('form-error').textContent = serverMessage(err);
+        })
+        .book({
+          type: S.type.id,
+          start: S.slot,
+          name: $('f-name').value,
+          email: email,
+          note: $('f-note').value,
+          website: $('f-website').value
+        });
+    };
+
+    $('name').textContent = BOOT.name;
+    $('intro').textContent = BOOT.intro;
+    fillZones($('tz'), S.tz);
+    $('tz').onchange = function () {
+      S.tz = this.value;
+      today = dateKey(Date.now(), S.tz);
+      S.day = null;
+      render();
+    };
+    drawTypes();
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include_('Ui') ?>
+  <style>
+    .admin { padding: 28px; }
+    .admin + .admin { border-top: 1px solid var(--line); }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+    .url {
+      flex: 1 1 280px;
+      font-size: 14px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 11px;
+      overflow-wrap: anywhere;
+    }
+    .email { display: grid; grid-template-columns: 300px 1fr; gap: 32px; margin-top: 18px; }
+    .quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+    .quick button { font-size: 13px; padding: 6px 10px; }
+    .check { display: flex; gap: 8px; align-items: center; font-weight: 400; font-size: 14px; }
+    #out { min-height: 210px; font-size: 14px; line-height: 1.55; }
+    .bookings { list-style: none; padding: 0; margin: 14px 0 0; }
+    .bookings li { display: flex; gap: 14px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .bookings li:last-child { border-bottom: 0; }
+    .bookings .when { min-width: 220px; font-weight: 500; }
+    @media (max-width: 760px) {
+      body { padding-top: 16px; }
+      .admin { padding: 20px; }
+      .email { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <section class="admin">
+      <h1>Scheduler</h1>
+      <p class="muted" style="margin-top:6px">Your private page. Keep this link to yourself.</p>
+      <label>Booking link to share</label>
+      <div class="row">
+        <div class="url" id="url"></div>
+        <button class="btn-quiet" type="button" id="copy-url">Copy</button>
+      </div>
+      <label for="zoom">Zoom link added to every booking</label>
+      <div class="row">
+        <input type="text" id="zoom" style="flex:1 1 280px" placeholder="https://zoom.us/j/…">
+        <button class="btn-quiet" type="button" id="save-zoom">Save</button>
+      </div>
+      <div class="error" id="zoom-msg" role="status"></div>
+    </section>
+
+    <section class="admin">
+      <h2>Email my availability</h2>
+      <p class="muted small" style="margin-top:4px">Pick the dates to offer. The text lists your open time on each, checked against both calendars.</p>
+      <div class="email">
+        <div>
+          <div id="month"></div>
+          <div class="quick">
+            <button class="btn-quiet" type="button" id="q3">Next 3 workdays</button>
+            <button class="btn-quiet" type="button" id="qweek">Next week</button>
+            <button class="btn-quiet" type="button" id="qclear">Clear</button>
+          </div>
+        </div>
+        <div>
+          <label for="minutes">Meeting length</label>
+          <select id="minutes"></select>
+          <label for="tz">Their time zone</label>
+          <select id="tz"></select>
+          <label class="check"><input type="checkbox" id="link" checked> Add my booking link</label>
+          <div class="row">
+            <button class="btn" type="button" id="write">Write the text</button>
+            <span class="muted small" id="picked-count"></span>
+          </div>
+          <label for="out">Paste into your email</label>
+          <textarea id="out" readonly></textarea>
+          <div class="row">
+            <button class="btn-quiet" type="button" id="copy-out">Copy</button>
+          </div>
+          <div class="error" id="email-error" role="alert"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin">
+      <h2>Upcoming bookings</h2>
+      <ul class="bookings" id="bookings"><li class="muted">Loading…</li></ul>
+    </section>
+  </main>
+
+  <script>
+    var BOOT = <?!= boot ?>;
+    var $ = function (id) { return document.getElementById(id); };
+    var HOST = BOOT.timezone;
+    var today = dateKey(Date.now(), HOST);
+    var S = { month: today.slice(0, 7), picked: {} };
+
+    function isOpen(k) {
+      return k >= today && BOOT.openDays.indexOf(new Date(k + 'T12:00:00Z').getUTCDay()) >= 0;
+    }
+
+    function pickedList() { return Object.keys(S.picked).sort(); }
+
+    function draw() {
+      drawMonth($('month'), {
+        month: S.month,
+        today: today,
+        isOn: isOpen,
+        isPicked: function (k) { return !!S.picked[k]; },
+        onPick: function (k) {
+          if (S.picked[k]) delete S.picked[k]; else S.picked[k] = true;
+          draw();
+        },
+        canPrev: S.month > today.slice(0, 7),
+        canNext: S.month < shiftMonth(today.slice(0, 7), 2),
+        onMonth: function (m) { S.month = m; draw(); }
+      });
+      var n = pickedList().length;
+      $('picked-count').textContent = n ? n + (n === 1 ? ' date' : ' dates') + ' picked' : 'No dates picked yet';
+    }
+
+    function pickNext(count, from) {
+      S.picked = {};
+      for (var k = from, n = 0, i = 0; n < count && i < 60; k = addDays(k, 1), i++) {
+        if (isOpen(k)) { S.picked[k] = true; n++; }
+      }
+      if (pickedList().length) S.month = pickedList()[0].slice(0, 7);
+      draw();
+    }
+
+    $('q3').onclick = function () { pickNext(3, addDays(today, 1)); };
+    $('qweek').onclick = function () {
+      var dow = new Date(today + 'T12:00:00Z').getUTCDay();
+      var monday = addDays(today, ((8 - dow) % 7) || 7);
+      S.picked = {};
+      for (var i = 0; i < 7; i++) if (isOpen(addDays(monday, i))) S.picked[addDays(monday, i)] = true;
+      S.month = monday.slice(0, 7);
+      draw();
+    };
+    $('qclear').onclick = function () { S.picked = {}; draw(); };
+
+    BOOT.types.forEach(function (t) {
+      var o = document.createElement('option');
+      o.value = t.minutes;
+      o.textContent = t.minutes + ' minutes';
+      if (t.minutes === 30) o.selected = true;
+      $('minutes').appendChild(o);
+    });
+    fillZones($('tz'), HOST);
+
+    $('write').onclick = function () {
+      var dates = pickedList();
+      $('email-error').textContent = '';
+      if (!dates.length) { $('email-error').textContent = 'Pick at least one date.'; return; }
+      var btn = this;
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      google.script.run
+        .withSuccessHandler(function (text) {
+          btn.disabled = false;
+          btn.textContent = 'Write the text';
+          $('out').value = text;
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          btn.textContent = 'Write the text';
+          $('email-error').textContent = serverMessage(err);
+        })
+        .adminEmailText(BOOT.key, dates, $('minutes').value, $('tz').value, $('link').checked);
+    };
+
+    $('copy-out').onclick = function () { if ($('out').value) copyText($('out').value, this); };
+    $('url').textContent = BOOT.bookingUrl;
+    $('copy-url').onclick = function () { copyText(BOOT.bookingUrl, this); };
+    $('zoom').value = BOOT.zoom || '';
+    $('zoom-msg').textContent = BOOT.zoom ? '' : 'No Zoom link yet. Invitations go out without one until you save it.';
+    $('save-zoom').onclick = function () {
+      var btn = this;
+      btn.disabled = true;
+      google.script.run
+        .withSuccessHandler(function (link) {
+          btn.disabled = false;
+          $('zoom').value = link;
+          $('zoom-msg').textContent = link ? 'Saved.' : 'Cleared. Invitations go out without a Zoom link.';
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          $('zoom-msg').textContent = serverMessage(err);
+        })
+        .adminSaveZoom(BOOT.key, $('zoom').value);
+    };
+
+    google.script.run
+      .withSuccessHandler(function (list) {
+        var ul = $('bookings');
+        ul.innerHTML = '';
+        if (!list.length) {
+          var li = document.createElement('li');
+          li.className = 'muted';
+          li.textContent = 'Nothing booked yet.';
+          ul.appendChild(li);
+          return;
+        }
+        list.forEach(function (b) {
+          var li = document.createElement('li');
+          var when = document.createElement('span');
+          when.className = 'when';
+          when.textContent = fmtDay(dateKey(b.start, HOST), { weekday: 'short', month: 'short' }) + ', ' +
+            fmtTime(b.start, HOST) + '–' + fmtTime(b.end, HOST);
+          var who = document.createElement('a');
+          who.href = b.link;
+          who.textContent = b.guest + (b.email && b.email !== b.guest ? ' (' + b.email + ')' : '');
+          li.appendChild(when);
+          li.appendChild(who);
+          if (b.status === 'declined') {
+            var d = document.createElement('span');
+            d.className = 'muted';
+            d.textContent = 'declined';
+            li.appendChild(d);
+          }
+          ul.appendChild(li);
+        });
+      })
+      .withFailureHandler(function (err) {
+        $('bookings').innerHTML = '';
+        $('bookings').textContent = serverMessage(err);
+      })
+      .adminBookings(BOOT.key);
+
+    draw();
+  </script>
+</body>
+</html>

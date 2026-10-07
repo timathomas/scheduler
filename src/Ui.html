@@ -1,0 +1,255 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f4ef;
+    --surface: #ffffff;
+    --ink: #1d2126;
+    --muted: #5d636b;
+    --line: #e4e0d7;
+    --accent: #1f5f5b;
+    --accent-ink: #ffffff;
+    --accent-soft: #e2eeec;
+    --warn: #9a3412;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a;
+      --surface: #1c2024;
+      --ink: #ebe8e2;
+      --muted: #a3a8ae;
+      --line: #2e3338;
+      --accent: #7cc0b7;
+      --accent-ink: #0f1a19;
+      --accent-soft: #1f3331;
+      --warn: #fdba74;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a; --surface: #1c2024; --ink: #ebe8e2; --muted: #a3a8ae; --line: #2e3338;
+    --accent: #7cc0b7; --accent-ink: #0f1a19; --accent-soft: #1f3331; --warn: #fdba74;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 40px 16px 64px;
+  }
+  h1, h2 { font-family: Newsreader, Georgia, serif; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  h1 { font-size: 34px; line-height: 1.15; }
+  h2 { font-size: 21px; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  select, input[type=text], input[type=email], textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 11px;
+  }
+  textarea { resize: vertical; }
+  select:focus, input:focus, textarea:focus, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  label { display: block; font-size: 13px; font-weight: 500; margin: 14px 0 6px; }
+  .btn {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+  }
+  .btn[disabled] { opacity: 0.55; cursor: default; }
+  .btn-quiet {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 14px;
+  }
+  .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 500; }
+  .error { color: var(--warn); font-size: 14px; margin-top: 10px; min-height: 1.5em; }
+
+  /* Month grid */
+  .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .cal-head strong { font-weight: 600; }
+  .cal-nav { display: flex; gap: 4px; }
+  .cal-nav button {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid var(--line); background: transparent; font-size: 16px; line-height: 1;
+  }
+  .cal-nav button[disabled] { opacity: 0.3; cursor: default; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal-dow { text-align: center; font-size: 12px; color: var(--muted); padding: 4px 0; }
+  .cal-day {
+    aspect-ratio: 1;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    opacity: 0.45;
+    cursor: default;
+    font-size: 14px;
+    padding: 0;
+  }
+  .cal-day.on { opacity: 1; color: var(--accent); background: var(--accent-soft); font-weight: 600; cursor: pointer; }
+  .cal-day.picked { background: var(--accent); color: var(--accent-ink); }
+  .cal-day.today { box-shadow: inset 0 0 0 1px var(--line); }
+
+  .spinner { color: var(--muted); font-size: 14px; padding: 12px 0; }
+</style>
+<script>
+  var DAY_MS = 86400000;
+
+  function guessTz() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; }
+  }
+
+  // 'YYYY-MM-DD' for an instant as seen in tz.
+  function dateKey(ms, tz) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .format(new Date(ms));
+  }
+
+  function addDays(key, n) {
+    return new Date(Date.parse(key + 'T12:00:00Z') + n * DAY_MS).toISOString().slice(0, 10);
+  }
+
+  function fmtTime(ms, tz) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' })
+      .format(new Date(ms)).replace(' AM', ' am').replace(' PM', ' pm');
+  }
+
+  function fmtDay(key, opts) {
+    return new Intl.DateTimeFormat('en-US', Object.assign({ timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric' }, opts || {}))
+      .format(new Date(key + 'T12:00:00Z'));
+  }
+
+  function fmtMonth(monthKey) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', year: 'numeric' })
+      .format(new Date(monthKey + '-15T12:00:00Z'));
+  }
+
+  function shiftMonth(monthKey, n) {
+    var y = Number(monthKey.slice(0, 4)), m = Number(monthKey.slice(5, 7)) - 1 + n;
+    var d = new Date(Date.UTC(y, m, 1));
+    return d.toISOString().slice(0, 7);
+  }
+
+  function lastOfMonth(monthKey) {
+    return addDays(shiftMonth(monthKey, 1) + '-01', -1);
+  }
+
+  // Draws a month into el. o: {month, today, isOn(key), isPicked(key), onPick(key),
+  // canPrev, canNext, onMonth(newMonth)}
+  function drawMonth(el, o) {
+    el.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'cal-head';
+    var title = document.createElement('strong');
+    title.textContent = fmtMonth(o.month);
+    var nav = document.createElement('div');
+    nav.className = 'cal-nav';
+    [['‹', -1, o.canPrev, 'Previous month'], ['›', 1, o.canNext, 'Next month']].forEach(function (b) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = b[0];
+      btn.setAttribute('aria-label', b[3]);
+      btn.disabled = !b[2];
+      btn.onclick = function () { o.onMonth(shiftMonth(o.month, b[1])); };
+      nav.appendChild(btn);
+    });
+    head.appendChild(title);
+    head.appendChild(nav);
+    el.appendChild(head);
+
+    var grid = document.createElement('div');
+    grid.className = 'cal-grid';
+    ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(function (d) {
+      var c = document.createElement('div');
+      c.className = 'cal-dow';
+      c.textContent = d;
+      grid.appendChild(c);
+    });
+    var first = o.month + '-01';
+    var lead = new Date(first + 'T12:00:00Z').getUTCDay();
+    for (var i = 0; i < lead; i++) grid.appendChild(document.createElement('div'));
+    for (var key = first; key.slice(0, 7) === o.month; key = addDays(key, 1)) {
+      (function (k) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'cal-day';
+        b.textContent = Number(k.slice(8, 10));
+        b.setAttribute('aria-label', fmtDay(k));
+        if (k === o.today) b.classList.add('today');
+        if (o.isOn(k)) {
+          b.classList.add('on');
+          b.onclick = function () { o.onPick(k); };
+        } else {
+          b.disabled = true;
+        }
+        if (o.isPicked(k)) b.classList.add('picked');
+        grid.appendChild(b);
+      })(key);
+    }
+    el.appendChild(grid);
+  }
+
+  function fillZones(select, current) {
+    var zones;
+    try { zones = Intl.supportedValuesOf('timeZone'); } catch (e) { zones = []; }
+    if (!zones.length) {
+      zones = ['America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'Europe/London', 'UTC'];
+    }
+    if (zones.indexOf(current) < 0) zones.unshift(current);
+    select.innerHTML = '';
+    zones.forEach(function (z) {
+      var opt = document.createElement('option');
+      opt.value = z;
+      opt.textContent = z.replace(/_/g, ' ');
+      if (z === current) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+
+  function copyText(text, btn) {
+    function done() {
+      var was = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = was; }, 1500);
+    }
+    function fallback() {
+      var t = document.createElement('textarea');
+      t.value = text;
+      document.body.appendChild(t);
+      t.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(t);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function serverMessage(err) {
+    return (err && err.message ? err.message : String(err)).replace(/^Error:\s*/, '');
+  }
+</script>
